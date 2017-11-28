@@ -1,9 +1,12 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/xml"
+	"flag"
 	"fmt"
 	"github.com/araddon/dateparse"
+	"github.com/lib/pq"
 	"io"
 	"os"
 	"path/filepath"
@@ -48,7 +51,11 @@ func readRecords(reader io.Reader) ([]XMLRecord, error) {
 	return healthData.XMLRecords, nil
 }
 
+var dbUrl = flag.String("database-url", "", "database url to connect to")
+
 func main() {
+	flag.Parse()
+
 	filePath, err := filepath.Abs("export.xml")
 	if err != nil {
 		fmt.Println(err)
@@ -67,7 +74,49 @@ func main() {
 		os.Exit(1)
 	}
 
-	record := records[0]
+	fmt.Println(*dbUrl)
 
-	fmt.Printf("last record type: %v, unit: %v, startDate: %v, value: %v", record.Type, record.Unit, record.StartDate, record.Value)
+	db, err := sql.Open("postgres", *dbUrl)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	txn, err := db.Begin()
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	stmt, err := txn.Prepare(pq.CopyIn("health_records", "date", "activity", "unit", "value", "source"))
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	for _, record := range records {
+		_, err = stmt.Exec(record.StartDate.Time, record.Type, record.Unit, record.Value, record.SourceName)
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+	}
+
+	_, err = stmt.Exec()
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	err = stmt.Close()
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	err = txn.Commit()
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
 }
